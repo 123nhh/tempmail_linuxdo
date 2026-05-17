@@ -8,10 +8,20 @@
 const API_BASE = '/api';
 const PUBLIC_BASE = '/public';
 
+function loadJSON(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || 'null') || fallback;
+  } catch {
+    localStorage.removeItem(key);
+    return fallback;
+  }
+}
+
 // ─── 状态 ───────────────────────────────────────────────────
 const state = {
   apiKey:    localStorage.getItem('tm_apikey') || '',
-  account:   JSON.parse(localStorage.getItem('tm_account') || 'null'),
+  account:   loadJSON('tm_account', null),
+  settings:  {},
   theme:     localStorage.getItem('tm_theme') || 'light',
   page:      'dashboard',
   // 当前邮箱
@@ -87,6 +97,7 @@ const api = {
   // 公共
   publicSettings: () => fetch(PUBLIC_BASE + '/settings').then(r => r.json()),
   publicStats:     () => fetch(PUBLIC_BASE + '/stats').then(r => r.json()),
+  keyLogin: body   => apiFetch(PUBLIC_BASE + '/key-login', { method: 'POST', body: JSON.stringify(body) }),
   register: body  => apiFetch(PUBLIC_BASE + '/register', { method: 'POST', body: JSON.stringify(body) }),
 
   // 账户
@@ -108,7 +119,7 @@ const api = {
   deleteEmail:(mid, eid) => apiFetch(API_BASE + '/mailboxes/' + mid + '/emails/' + eid, { method: 'DELETE' }),
   // 管理
   admin: {
-    listAccounts:  (page=1,size=50) => apiFetch(API_BASE + '/admin/accounts?page='+page+'&size='+size).then(d => Array.isArray(d) ? d : (d.data || [])),
+    listAccounts:  (page=1,size=10) => apiFetch(API_BASE + '/admin/accounts?page='+page+'&size='+size),
     createAccount: body => apiFetch(API_BASE + '/admin/accounts', { method: 'POST', body: JSON.stringify(body) }),
     deleteAccount: id   => apiFetch(API_BASE + '/admin/accounts/' + id, { method: 'DELETE' }),
     addDomain:   body => apiFetch(API_BASE + '/admin/domains', { method: 'POST', body: JSON.stringify(body) }),
@@ -135,9 +146,9 @@ function applyTheme(t) {
 async function tryLogin(key) {
   state.apiKey = key;
   try {
-    const acct = await apiFetch(API_BASE + '/me');
+    const acct = await api.keyLogin({ api_key: key });
     state.account = acct;
-    localStorage.setItem('tm_apikey', key);
+    localStorage.setItem('tm_apikey', acct.api_key || key);
     localStorage.setItem('tm_account', JSON.stringify(acct));
     showMainLayout();
     navigate('dashboard');
@@ -145,6 +156,25 @@ async function tryLogin(key) {
   } catch (e) {
     state.apiKey = '';
     toast('API Key 无效: ' + e.message, 'error');
+  }
+}
+
+async function restoreSession(key) {
+  state.apiKey = key;
+  try {
+    const acct = await api.me();
+    state.account = acct;
+    localStorage.setItem('tm_apikey', key);
+    localStorage.setItem('tm_account', JSON.stringify(acct));
+    showMainLayout();
+    navigate('dashboard');
+  } catch (e) {
+    state.apiKey = '';
+    state.account = null;
+    localStorage.removeItem('tm_apikey');
+    localStorage.removeItem('tm_account');
+    showAuthPage();
+    toast('登录状态已失效，请重新登录', 'warn');
   }
 }
 
@@ -202,8 +232,10 @@ function buildAuthPage() {
   `;
   wrap.appendChild(card);
 
-  // 检查是否允许注册
   api.publicSettings().then(d => {
+    state.settings = d || {};
+    if ($('tab-login')?.classList.contains('active')) renderLoginForm();
+    renderAuthTabs();
     const open = d.registration_open === 'true' || d.registration_open === true;
     if (!open) {
       const regTab = card.querySelector('#tab-reg');
@@ -214,10 +246,20 @@ function buildAuthPage() {
   return wrap;
 }
 
+function renderAuthTabs() {
+  const keyLogin = state.settings.key_login_enabled !== false;
+  const linuxDOLogin = state.settings.linuxdo_login_enabled === true;
+  const loginTab = $('tab-login');
+  if (loginTab) loginTab.style.display = keyLogin ? '' : 'none';
+  if (!keyLogin && $('tab-login')?.classList.contains('active')) renderLoginForm();
+  const linuxDOButton = $('btn-linuxdo-login');
+  if (linuxDOButton) linuxDOButton.style.display = linuxDOLogin ? '' : 'none';
+}
+
 window.switchAuthTab = function(t) {
   document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
   if (t === 'login') {
-    $('tab-login').classList.add('active');
+    if ($('tab-login')) $('tab-login').classList.add('active');
     renderLoginForm();
   } else {
     $('tab-reg').classList.add('active');
@@ -228,13 +270,21 @@ window.switchAuthTab = function(t) {
 function renderLoginForm() {
   const area = $('auth-form-area');
   if (!area) return;
+  const keyLogin = state.settings.key_login_enabled !== false;
+  const linuxDOLogin = state.settings.linuxdo_login_enabled === true;
+  const showKeyLogin = keyLogin || linuxDOLogin;
   area.innerHTML = `
+    ${showKeyLogin ? `
     <div class="form-group">
       <label class="form-label">API Key</label>
       <input class="form-input" id="login-key" type="password" placeholder="tm_xxxxxxxxxxxx" autocomplete="current-password" />
-      <div class="form-hint">在邮箱管理后台获取的 API Key</div>
+      <div class="form-hint">${keyLogin ? '在邮箱管理后台获取的 API Key' : 'API Key 登录已关闭，仅管理员 API Key 可用于后台维护'}</div>
     </div>
     <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登 录</button>
+    ` : ''}
+    ${showKeyLogin && linuxDOLogin ? '<div class="divider">或</div>' : ''}
+    ${linuxDOLogin ? `<button class="btn btn-primary" id="btn-linuxdo-login" style="width:100%" onclick="loginWithLinuxDO()">使用 Linux DO Connect 登录</button>` : ''}
+    ${!showKeyLogin && !linuxDOLogin ? `<div style="text-align:center;color:var(--text-muted);line-height:1.8">当前没有启用任何登录方式，请联系管理员。</div>` : ''}
     <div class="divider"></div>
     <div style="text-align:center;font-size:0.78rem;color:var(--text-muted)">
       没有账户？联系管理员创建，或点击上方"注册账户"
@@ -264,6 +314,10 @@ window.doLogin = async function() {
   const key = ($('login-key')?.value || '').trim();
   if (!key) { toast('请输入 API Key', 'warn'); return; }
   await tryLogin(key);
+};
+
+window.loginWithLinuxDO = function() {
+  window.location.href = PUBLIC_BASE + '/auth/linuxdo';
 };
 
 window.doRegister = async function() {
@@ -923,23 +977,27 @@ async function renderDomainsGuide(container) {
 }
 
 // ─── Admin: 账户管理 ─────────────────────────────────────────
-async function renderAdminAccounts(container) {
+async function renderAdminAccounts(container, page = 1) {
   const actions = $('topbar-actions');
   if (actions) {
     actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="showCreateAccountModal()">+ 创建账户</button>`;
   }
 
-  const accounts = await api.admin.listAccounts();
+  const size = 10;
+  const res = await api.admin.listAccounts(page, size);
+  const accounts = res.data || [];
+  const total = res.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / size));
   container.innerHTML = `
-    <div class="card" style="max-width:860px">
+    <div class="card" style="max-width:980px">
       <div class="card-header">
         <div class="card-title">👥 账户列表</div>
-        <div style="font-size:0.78rem;color:var(--text-muted)">共 ${(accounts||[]).length} 个账户</div>
+        <div style="font-size:0.78rem;color:var(--text-muted)">共 ${total} 个账户 · 第 ${page}/${totalPages} 页</div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>用户名</th><th>角色</th><th>创建时间</th><th>操作</th></tr>
+            <tr><th>用户名</th><th>角色</th><th>收件统计</th><th>创建时间</th><th>操作</th></tr>
           </thead>
           <tbody>
             ${(accounts||[]).map(a => `
@@ -954,6 +1012,11 @@ async function renderAdminAccounts(container) {
                 <td>${a.is_admin
                   ? '<span class="badge badge-gold">管理员</span>'
                   : '<span class="badge badge-gray">普通用户</span>'}</td>
+                <td style="font-size:0.78rem;line-height:1.7">
+                  <div>累计收件：<strong>${a.received_email_count || 0}</strong></div>
+                  <div style="color:var(--text-muted)">当前邮件：${a.current_email_count || 0}</div>
+                  <div style="color:var(--text-muted)">邮箱：${a.active_mailbox_count || 0}/${a.mailbox_count || 0}</div>
+                </td>
                 <td style="font-size:0.8rem">${formatDate(a.created_at)}</td>
                 <td>
                   ${!a.is_admin ? `<button class="btn btn-danger btn-sm" onclick="confirmDeleteAccount('${a.id}','${escHtml(a.username||'')}')">删除</button>` : ''}
@@ -962,6 +1025,11 @@ async function renderAdminAccounts(container) {
             `).join('')}
           </tbody>
         </table>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.5rem;margin-top:1rem">
+        <button class="btn btn-secondary btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="renderAdminAccounts(document.getElementById('page-content'), ${page - 1})">上一页</button>
+        <span style="font-size:0.78rem;color:var(--text-muted)">${page} / ${totalPages}</span>
+        <button class="btn btn-secondary btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="renderAdminAccounts(document.getElementById('page-content'), ${page + 1})">下一页</button>
       </div>
     </div>
   `;
@@ -1259,6 +1327,8 @@ async function renderAdminSettings(container) {
   try { settings = await api.admin.getSettings(); } catch {}
 
   const regOpen    = settings.registration_open === 'true' || settings.registration_open === true;
+  const keyLogin   = settings.key_login_enabled !== 'false' && settings.key_login_enabled !== false;
+  const linuxDOLogin = settings.linuxdo_login_enabled === 'true' || settings.linuxdo_login_enabled === true;
   const smtpIp      = settings.smtp_server_ip       || '';
   const smtpHostname = settings.smtp_hostname         || '';
   const siteTitle  = settings.site_title            || 'TempMail';
@@ -1266,6 +1336,9 @@ async function renderAdminSettings(container) {
   const ttlMins    = settings.mailbox_ttl_minutes   || '30';
   const announce   = settings.announcement          || '';
   const maxMb      = settings.max_mailboxes_per_user|| '5';
+  const linuxDOClientID = settings.linuxdo_client_id || '';
+  const linuxDOSecretSet = settings.linuxdo_client_secret_set === 'true' || settings.linuxdo_client_secret_set === true;
+  const linuxDORedirectURL = settings.linuxdo_redirect_url || `${window.location.origin}/public/auth/linuxdo/callback`;
 
   function inputRow(id, label, value, hint, placeholder = '', settingKey = '') {
     const key = settingKey || id.replace(/^input-/, '').replace(/-/g, '_');
@@ -1295,6 +1368,54 @@ async function renderAdminSettings(container) {
             <div class="toggle-label">开放自行注册</div>
             <span class="toggle-desc">开启后未登录用户可在登录页自行注册账户</span>
           </div>
+        </div>
+        <div class="divider"></div>
+
+        <!-- 登录方式开关 -->
+        <div class="toggle-wrap" style="margin-bottom:0.5rem">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-key-login" ${keyLogin ? 'checked' : ''} onchange="saveLoginSetting('key_login_enabled', this.checked, 'API Key 登录')">
+            <span class="toggle-slider"></span>
+          </label>
+          <div>
+            <div class="toggle-label">启用 API Key 登录</div>
+            <span class="toggle-desc">开启后用户可使用 API Key 在登录页登录</span>
+          </div>
+        </div>
+        <div class="toggle-wrap" style="margin-bottom:0.5rem">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-linuxdo-login" ${linuxDOLogin ? 'checked' : ''} onchange="saveLoginSetting('linuxdo_login_enabled', this.checked, 'Linux DO Connect 登录')">
+            <span class="toggle-slider"></span>
+          </label>
+          <div>
+            <div class="toggle-label">启用 Linux DO Connect 登录</div>
+            <span class="toggle-desc">需同时配置 LINUXDO_CLIENT_ID、LINUXDO_CLIENT_SECRET、LINUXDO_REDIRECT_URL 环境变量</span>
+          </div>
+        </div>
+        <div class="divider"></div>
+
+        <div class="form-group">
+          <label class="form-label">Linux DO Client ID</label>
+          <div style="display:flex;gap:0.5rem">
+            <input class="form-input" id="input-linuxdo-client-id" value="${escHtml(linuxDOClientID)}" placeholder="Client ID" style="flex:1" />
+            <button class="btn btn-primary btn-sm" onclick="saveSetting('input-linuxdo-client-id','linuxdo_client_id')">✓ 保存</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Linux DO Client Secret</label>
+          <div style="display:flex;gap:0.5rem">
+            <input class="form-input" id="input-linuxdo-client-secret" type="password" value="" placeholder="${linuxDOSecretSet ? '已配置，留空不修改' : 'Client Secret'}" style="flex:1" autocomplete="new-password" />
+            <button class="btn btn-primary btn-sm" onclick="saveSetting('input-linuxdo-client-secret','linuxdo_client_secret')">✓ 保存</button>
+          </div>
+          <div class="form-hint">${linuxDOSecretSet ? 'Client Secret 已配置。出于安全原因不会回显，留空保存不会覆盖。' : 'Client Secret 只保存在后端数据库，不会通过公开配置下发。'}</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Linux DO 回调地址</label>
+          <div style="display:flex;gap:0.5rem">
+            <input class="form-input" id="input-linuxdo-redirect-url" value="${escHtml(linuxDORedirectURL)}" placeholder="https://your-domain.com/public/auth/linuxdo/callback" style="flex:1" />
+            <button class="btn btn-primary btn-sm" onclick="saveSetting('input-linuxdo-redirect-url','linuxdo_redirect_url')">✓ 保存</button>
+          </div>
+          <div class="form-hint">需要与 Connect.Linux.Do 应用后台配置的回调地址完全一致。</div>
         </div>
         <div class="divider"></div>
 
@@ -1364,6 +1485,10 @@ async function renderAdminSettings(container) {
 window.saveSetting = async function(inputId, settingKey) {
   const el2 = document.getElementById(inputId);
   const val = el2 ? (el2.tagName === 'TEXTAREA' ? el2.value : el2.value.trim()) : '';
+  if (settingKey === 'linuxdo_client_secret' && !val) {
+    toast('Client Secret 留空，未修改', 'info');
+    return;
+  }
   try {
     await api.admin.saveSettings({ [settingKey]: val });
     toast('已保存', 'success');
@@ -1380,6 +1505,17 @@ window.saveRegistrationSetting = async function(enabled) {
   } catch(e) {
     toast('保存失败: ' + e.message, 'error');
     const cb = $('toggle-reg');
+    if (cb) cb.checked = !enabled;
+  }
+};
+
+window.saveLoginSetting = async function(key, enabled, label) {
+  try {
+    await api.admin.saveSettings({ [key]: enabled ? 'true' : 'false' });
+    toast(`${label}已${enabled ? '开启' : '关闭'}`, 'success');
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'error');
+    const cb = key === 'key_login_enabled' ? $('toggle-key-login') : $('toggle-linuxdo-login');
     if (cb) cb.checked = !enabled;
   }
 };
@@ -1752,12 +1888,9 @@ k6 run /tmp/test.js`,
 function init() {
   applyTheme(state.theme);
 
-  if (state.apiKey && state.account) {
-    showMainLayout();
-    navigate('dashboard');
-  } else if (state.apiKey) {
-    // 验证 key
-    tryLogin(state.apiKey);
+  if (state.apiKey) {
+    // 验证已有会话；不走可被后台关闭的 API Key 登录入口。
+    restoreSession(state.apiKey);
   } else {
     showAuthPage();
   }
