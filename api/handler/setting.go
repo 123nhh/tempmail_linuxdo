@@ -23,6 +23,7 @@ func (h *SettingHandler) GetPublic(c *gin.Context) {
 		regOpen = "false"
 	}
 	siteTitle, _ := h.store.GetSetting(c.Request.Context(), "site_title")
+	siteLogoURL, _ := h.store.GetSetting(c.Request.Context(), "site_logo_url")
 	smtpIP, _ := h.store.GetSetting(c.Request.Context(), "smtp_server_ip")
 	smtpHostname, _ := h.store.GetSetting(c.Request.Context(), "smtp_hostname")
 	announce, _ := h.store.GetSetting(c.Request.Context(), "announcement")
@@ -39,6 +40,7 @@ func (h *SettingHandler) GetPublic(c *gin.Context) {
 		"key_login_enabled":     keyLogin != "false",
 		"linuxdo_login_enabled": linuxDOLogin == "true",
 		"site_title":            siteTitle,
+		"site_logo_url":         siteLogoURL,
 		"smtp_server_ip":        smtpIP,
 		"smtp_hostname":         smtpHostname,
 		"announcement":          announce,
@@ -77,6 +79,7 @@ func (h *SettingHandler) AdminUpdate(c *gin.Context) {
 		"smtp_server_ip":         true,
 		"smtp_hostname":          true,
 		"site_title":             true,
+		"site_logo_url":          true,
 		"announcement":           true,
 		"default_domain":         true,
 		"mailbox_ttl_minutes":    true,

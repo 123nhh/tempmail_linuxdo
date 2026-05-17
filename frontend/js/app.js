@@ -72,7 +72,22 @@ function timeAgo(s) {
 
 async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.left = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (!ok) throw new Error('copy failed');
+    }
     toast('已复制到剪贴板', 'success');
   } catch {
     toast('复制失败，请手动选择', 'warn');
@@ -132,6 +147,12 @@ const api = {
     getDomainStatus: id => apiFetch(API_BASE + '/admin/domains/' + id + '/status'),
   },
 };
+
+function logoHTML(cls) {
+  const url = (state.settings?.site_logo_url || '').trim();
+  if (url) return `<img class="${cls}" src="${escHtml(url)}" alt="Logo" loading="lazy" />`;
+  return `<div class="${cls}">✉</div>`;
+}
 
 // ─── 主题 ────────────────────────────────────────────────────
 function applyTheme(t) {
@@ -220,8 +241,8 @@ function buildAuthPage() {
   const card = el('div', 'auth-card');
   card.innerHTML = `
     <div class="auth-logo">
-      <div class="logo-icon">✉</div>
-      <h1>TempMail</h1>
+      ${logoHTML('logo-icon')}
+      <h1>${escHtml(state.settings?.site_title || 'TempMail')}</h1>
       <p>临时邮箱服务 · 安全隔离 · 按需分配</p>
     </div>
     <div class="auth-tabs">
@@ -234,6 +255,13 @@ function buildAuthPage() {
 
   api.publicSettings().then(d => {
     state.settings = d || {};
+    const logo = card.querySelector('.auth-logo');
+    if (logo) {
+      logo.querySelector('.logo-icon')?.remove();
+      logo.insertAdjacentHTML('afterbegin', logoHTML('logo-icon'));
+      const title = logo.querySelector('h1');
+      if (title) title.textContent = state.settings.site_title || 'TempMail';
+    }
     if ($('tab-login')?.classList.contains('active')) renderLoginForm();
     renderAuthTabs();
     const open = d.registration_open === 'true' || d.registration_open === true;
@@ -360,9 +388,9 @@ function buildMainLayout() {
     <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
     <nav class="sidebar" id="main-sidebar">
       <div class="sidebar-logo">
-        <div class="logo-mark">✉</div>
+        ${logoHTML('logo-mark')}
         <div>
-          <span>TempMail</span>
+          <span>${escHtml(state.settings?.site_title || 'TempMail')}</span>
           <small>临时邮箱服务</small>
         </div>
       </div>
@@ -619,10 +647,12 @@ window.createMailbox = async function() {
       </div>
       <div class="form-group">
         <label class="form-label">域名</label>
-        <select class="form-input" id="mb-domain">
-          <option value="">随机选取</option>
-          ${domainOptions}
-        </select>
+        <div class="select-wrap">
+          <select class="form-input form-select" id="mb-domain">
+            <option value="">随机选取</option>
+            ${domainOptions}
+          </select>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">取消</button>
@@ -1004,7 +1034,7 @@ async function renderAdminAccounts(container, page = 1) {
               <tr>
                 <td>
                   <div style="font-weight:600">${escHtml(a.username || '—')}</div>
-                  <div class="code-box" style="margin-top:0.3rem;font-size:0.72rem">
+                  <div class="account-key-box">
                     <span>${escHtml(a.api_key || '—')}</span>
                     <button class="copy-btn" onclick="copyText('${escHtml(a.api_key||'')}')">⎘</button>
                   </div>
@@ -1332,6 +1362,7 @@ async function renderAdminSettings(container) {
   const smtpIp      = settings.smtp_server_ip       || '';
   const smtpHostname = settings.smtp_hostname         || '';
   const siteTitle  = settings.site_title            || 'TempMail';
+  const siteLogoURL = settings.site_logo_url         || '';
   const defDomain  = settings.default_domain        || '';
   const ttlMins    = settings.mailbox_ttl_minutes   || '30';
   const announce   = settings.announcement          || '';
@@ -1421,6 +1452,7 @@ async function renderAdminSettings(container) {
 
         <!-- 站点名称 -->
         ${inputRow('input-site-title', '站点名称', siteTitle, '显示在标题栏和登录页', 'TempMail')}
+        ${inputRow('input-site-logo-url', '站点 Logo URL', siteLogoURL, '填写图片 URL 后，登录页和左上角侧边栏会显示自定义 Logo；留空使用默认图标', 'https://example.com/logo.png', 'site_logo_url')}
         <div class="divider"></div>
 
         <!-- 公告 -->
@@ -1862,19 +1894,19 @@ k6 run /tmp/test.js`,
   ];
 
   container.innerHTML = `
-    <div style="max-width:860px">
-      <div style="margin-bottom:1.2rem;padding:0.8rem 1rem;background:var(--bg-secondary);border-radius:8px;font-size:0.82rem">
-        🔑 当前 API Key：
-        <code style="margin-left:0.5rem;filter:blur(3px);cursor:pointer" onclick="this.style.filter='none'">${escHtml(key)}</code>
+    <div class="api-docs-page">
+      <div class="api-key-panel">
+        <span class="api-key-label">当前 API Key</span>
+        <code class="api-key-value" onclick="this.style.filter='none'">${escHtml(key)}</code>
         <button class="copy-btn" onclick="copyText('${escHtml(key)}')" title="复制">⎘</button>
       </div>
       ${sections.map((s,i) => `
-        <div class="card" style="margin-bottom:1rem">
+        <div class="card api-doc-card" style="margin-bottom:1rem">
           <div class="card-header"><div class="card-title">${escHtml(s.title)}</div></div>
           <div class="card-body">
-            <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:0.6rem">${escHtml(s.desc)}</p>
-            <div class="code-box" style="white-space:pre;overflow-x:auto;font-size:0.75rem;line-height:1.6;position:relative">
-              <button class="copy-btn" style="position:absolute;top:6px;right:6px" onclick="copyText(${JSON.stringify(s.code)})" title="复制">⎘</button>
+            <p class="api-doc-desc">${escHtml(s.desc)}</p>
+            <div class="api-code-block">
+              <button class="copy-btn api-code-copy" onclick="copyText(${JSON.stringify(s.code)})" title="复制">⎘</button>
               ${escHtml(s.code)}
             </div>
           </div>

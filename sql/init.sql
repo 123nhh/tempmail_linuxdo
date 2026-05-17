@@ -108,6 +108,7 @@ INSERT INTO app_settings (key, value) VALUES ('smtp_server_ip', '') ON CONFLICT 
 INSERT INTO app_settings (key, value) VALUES ('smtp_hostname', '') ON CONFLICT DO NOTHING;
 INSERT INTO app_settings (key, value) VALUES ('mailbox_ttl_minutes', '30') ON CONFLICT DO NOTHING;
 INSERT INTO app_settings (key, value) VALUES ('total_emails_received', '0') ON CONFLICT DO NOTHING;
+INSERT INTO app_settings (key, value) VALUES ('site_logo_url', '') ON CONFLICT DO NOTHING;
 
 -- ============================================================
 -- 7. 数据库性能参数（在 postgresql.conf 或 docker 环境变量中设置更佳）
